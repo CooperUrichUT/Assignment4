@@ -13,7 +13,9 @@ from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import CountVectorizer
 from nltk.corpus import stopwords
 import string
-
+from rouge import Rouge
+import torch
+import re
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -48,9 +50,11 @@ class EntailmentModel:
         outputs = self.model(**inputs)
         logits = outputs.logits
 
-        # Note that the labels are ["contradiction", "neutral", "entailment"]. There are a number of ways to map
-        # these logits or probabilities to classification decisions; you'll have to decide how you want to do this.
-        raise Exception("Not implemented")
+    # Define labels
+        labels = ["contradiction", "neutral", "entailment"]
+        predicted_label = labels[torch.argmax(logits, dim=1)]
+
+        return predicted_label
 
 
 class FactChecker(object):
@@ -82,8 +86,12 @@ class AlwaysEntailedFactChecker(object):
 class WordRecallThresholdFactChecker(object):
     def preprocess_text(self, text: str):
         # Tokenize the text and remove punctuation
+        doc = nlp(text)
         tokens = word_tokenize(text)
-        tokens = [word.lower() for word in tokens if word.isalpha() and word not in string.punctuation and word != '<s>']
+        punctuation_to_remove = ['.', ',', '!', '?', '-', '(', ')', '/', "'", '"', '``', "''", '--', '...', ';', ':', '[', ']', '{', '}', '`', '<s>']
+        tokens = [word for word in tokens if word not in punctuation_to_remove]
+        tokens = [word if not re.match(r'^\d+$', word) else 'NUM' for word in tokens]
+        tokens = [word.lower() for word in tokens if word != 'NUM' and word.isalpha() and word not in string.punctuation]
 
         # Remove stop words
         stop_words = set(stopwords.words('english'))
@@ -102,38 +110,90 @@ class WordRecallThresholdFactChecker(object):
         return intersection / union if union != 0 else 0  # To avoid division by zero
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        print("Fact: ", fact)
-
         # Preprocess fact
         fact = self.preprocess_text(fact)
+        print("Fact: ", fact)
         fact_word_set = set(fact.split())
 
         # Initialize lists to store Jaccard similarity scores
         similarity_scores = []
-
+        supported = False
         for passage in passages:
             passage_text = passage['text']
-
-            # Preprocess passage text
             passage_text = self.preprocess_text(passage_text)
             passage_word_set = set(passage_text.split())
 
             # Calculate Jaccard similarity between fact and passage
             jaccard_sim = self.jaccard_similarity(fact_word_set, passage_word_set)
-            similarity_scores.append((passage['title'], jaccard_sim))
+            similarity_scores.append((passage_text, jaccard_sim))
 
-        supported = False
+        
 
         # Print the similarity scores for each passage
-        for title, score in similarity_scores:
-            if score > 0.02:  # You can adjust the threshold here
+        for text, score in similarity_scores:
+            # 0.026 is the best 
+            if score > 0.026:  # You can adjust the threshold here
                 supported = True
-            print(f"Jaccard Similarity between Fact and '{title}': {score}")
+            print(f"Jaccard Similarity between {fact} and the text': {score}")
 
         if supported:
             return "S"
         else:
-            return "NS"
+            return "NS" 
+
+    # Jaccard similarity (71% accuracy)
+    # def preprocess_text(self, text: str):
+        # Tokenize the text and remove punctuation
+    #     tokens = word_tokenize(text)
+    #     tokens = [word.lower() for word in tokens if word.isalpha() and word not in string.punctuation]
+
+    #     # Remove stop words
+    #     stop_words = set(stopwords.words('english'))
+    #     # stop_words = ["the", "and", "is", "to", "a", "of"]
+    #     tokens = [word for word in tokens if word not in stop_words]
+
+    #     # Stem the remaining words
+    #     stemmer = PorterStemmer()
+    #     tokens = [stemmer.stem(word) for word in tokens]
+
+    #     return ' '.join(tokens)
+    
+    # def jaccard_similarity(self, set1, set2):
+    #     intersection = len(set1.intersection(set2))
+    #     union = len(set1) + len(set2) - intersection
+    #     return intersection / union if union != 0 else 0  # To avoid division by zero
+
+    # def predict(self, fact: str, passages: List[dict]) -> str:
+    #     print("Fact: ", fact)
+
+    #     # Preprocess fact
+    #     fact = self.preprocess_text(fact)
+    #     fact_word_set = set(fact.split())
+
+    #     # Initialize lists to store Jaccard similarity scores
+    #     similarity_scores = []
+
+    #     for passage in passages:
+    #         passage_text = passage['text']
+    #         passage_text = self.preprocess_text(passage_text)
+    #         passage_word_set = set(passage_text.split())
+
+    #         # Calculate Jaccard similarity between fact and passage
+    #         jaccard_sim = self.jaccard_similarity(fact_word_set, passage_word_set)
+    #         similarity_scores.append((passage['title'], jaccard_sim))
+
+    #     supported = False
+
+    #     # Print the similarity scores for each passage
+    #     for title, score in similarity_scores:
+    #         if score > 0.026:  # You can adjust the threshold here
+    #             supported = True
+    #         print(f"Jaccard Similarity between Fact and '{title}': {score}")
+
+    #     if supported:
+    #         return "S"
+    #     else:
+    #         return "NS" 
 
     # cosine similarity
     # def predict(self, fact: str, passages: List[dict]) -> str:
@@ -180,6 +240,8 @@ class WordRecallThresholdFactChecker(object):
 
 
 class EntailmentFactChecker(object):
+    def __init__(self):
+        self.nlp = spacy.load('en_core_web_sm')
     def predict(self, fact: str, passages: List[dict]) -> str:
         raise Exception("Implement me")
 
