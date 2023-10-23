@@ -1,19 +1,15 @@
 # factcheck.py
+import gc
 import numpy as np
 from collections import Counter
 import spacy
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from typing import List
 import nltk
-nltk.download('punkt')
-nltk.download('stopwords')
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
-from sklearn.feature_extraction.text import CountVectorizer
-from nltk.corpus import stopwords
 import string
-
+import torch
+import re
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -41,16 +37,25 @@ class EntailmentModel:
         self.model = model
         self.tokenizer = tokenizer
 
-    def check_entailment(self, premise: str, hypothesis:str ):
-        # Tokenize the premise and hypothesis
-        inputs = self.tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, padding=True)
-        # Get the model's prediction
-        outputs = self.model(**inputs)
-        logits = outputs.logits
+    def check_entailment(self, premise: str, hypothesis: str):
+        with torch.no_grad():
+            # Tokenize the premise and hypothesis
+            inputs = self.tokenizer(premise, hypothesis, return_tensors='pt', truncation=True, padding=True)
+            # Get the model's prediction
+            outputs = self.model(**inputs)
+            logits = outputs.logits
 
-        # Note that the labels are ["contradiction", "neutral", "entailment"]. There are a number of ways to map
+        # Note that the labels are ["entailment", "neutral", "contradiction"]. There are a number of ways to map
         # these logits or probabilities to classification decisions; you'll have to decide how you want to do this.
+
         raise Exception("Not implemented")
+
+        # To prevent out-of-memory (OOM) issues during autograding, we explicitly delete
+        # objects inputs, outputs, logits, and any results that are no longer needed after the computation.
+        del inputs, outputs, logits
+        gc.collect()
+
+        # return something
 
 
 class FactChecker(object):
@@ -82,12 +87,15 @@ class AlwaysEntailedFactChecker(object):
 class WordRecallThresholdFactChecker(object):
     def preprocess_text(self, text: str):
         # Tokenize the text and remove punctuation
+        doc = nlp(text)
         tokens = word_tokenize(text)
-        tokens = [word.lower() for word in tokens if word.isalpha() and word not in string.punctuation and word != '<s>']
+        # tokens = [word for word in tokens if word not in punctuation_to_remove]
+        tokens = [word if not re.match(r'^\d+$', word) else 'NUM' for word in tokens]
+        tokens = [word.lower() for word in tokens if word != 'NUM' and word.isalpha() and word not in string.punctuation]
 
         # Remove stop words
-        stop_words = set(stopwords.words('english'))
-        # stop_words = ["the", "and", "is", "to", "a", "of"]
+        # stop_words = set(stopwords.words('english'))
+        stop_words = ["the", "and", "is", "to", "a", "of", "in", "it", "I", "that", "you", "he", "she", "we", "they"]
         tokens = [word for word in tokens if word not in stop_words]
 
         # Stem the remaining words
@@ -96,90 +104,53 @@ class WordRecallThresholdFactChecker(object):
 
         return ' '.join(tokens)
     
-    def jaccard_similarity(self, set1, set2):
-        intersection = len(set1.intersection(set2))
-        union = len(set1) + len(set2) - intersection
-        return intersection / union if union != 0 else 0  # To avoid division by zero
+    def jaccard_similarity(self, fact_word_set, passage_word_set):
+        intersection = len(fact_word_set.intersection(passage_word_set))
+        # union = len(set1) + len(set2) - intersection
+        return intersection / len(fact_word_set) # / union if union != 0 else 0  # To avoid division by zero
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        print("Fact: ", fact)
-
         # Preprocess fact
         fact = self.preprocess_text(fact)
+        print("Fact: ", fact)
         fact_word_set = set(fact.split())
 
         # Initialize lists to store Jaccard similarity scores
         similarity_scores = []
-
+        supported = False
         for passage in passages:
             passage_text = passage['text']
-
-            # Preprocess passage text
             passage_text = self.preprocess_text(passage_text)
             passage_word_set = set(passage_text.split())
 
             # Calculate Jaccard similarity between fact and passage
             jaccard_sim = self.jaccard_similarity(fact_word_set, passage_word_set)
-            similarity_scores.append((passage['title'], jaccard_sim))
+            similarity_scores.append((passage_text, jaccard_sim))
 
-        supported = False
+        
 
         # Print the similarity scores for each passage
-        for title, score in similarity_scores:
-            if score > 0.02:  # You can adjust the threshold here
+        for text, score in similarity_scores:
+            if score > 0.7:  # You can adjust the threshold herex
                 supported = True
-            print(f"Jaccard Similarity between Fact and '{title}': {score}")
+            print(f"Jaccard Similarity for {fact}': {score}")
 
         if supported:
             return "S"
         else:
-            return "NS"
+            return "NS" 
 
-    # cosine similarity
-    # def predict(self, fact: str, passages: List[dict]) -> str:
-    #     print("Fact: ", fact)
-
-    #     # Preprocess fact
-    #     fact = self.preprocess_text(fact)
-
-    #     # Initialize lists to store cosine similarity scores
-    #     similarity_scores = []
-
-    #     # Initialize TF-IDF vectorizer
-    #     tfidf_vectorizer = TfidfVectorizer()
-
-    #     # Tokenize and create TF-IDF vectors for each passage, then calculate cosine similarity
-    #     for passage in passages:
-    #         passage_text = passage['text']
-
-    #         # Preprocess passage text
-    #         passage_text = self.preprocess_text(passage_text)
-
-    #         # Create TF-IDF vectors for fact and passage text
-    #         tfidf_matrix = tfidf_vectorizer.fit_transform([fact, passage_text])
-    #         cosine_sim = cosine_similarity(tfidf_matrix)
-
-    #         # Cosine similarity between fact and passage
-    #         similarity_score = cosine_sim[0, 1]
-    #         similarity_scores.append((passage['title'], similarity_score))
-
-    #     supported = False
-    #     # Print the similarity scores for each passage
-    #     for title, score in similarity_scores:
-    #         if score > 0.03:  # You can adjust the threshold here
-    #             supported = True
-    #         print(f"Cosine Similarity between Fact and '{title}': {score}")
-
-    #     if supported:
-    #         return "S"
-    #     else:
-    #         return "NS"
+# test
 
 
-        
+
+
 
 
 class EntailmentFactChecker(object):
+    def __init__(self, ent_model):
+        self.ent_model = ent_model
+
     def predict(self, fact: str, passages: List[dict]) -> str:
         raise Exception("Implement me")
 
@@ -214,3 +185,4 @@ class DependencyRecallThresholdFactChecker(object):
             relation = (head, token.dep_, dependent)
             relations.add(relation)
         return relations
+
