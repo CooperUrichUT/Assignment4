@@ -1,4 +1,5 @@
 # factcheck.py
+# test
 import gc
 import numpy as np
 from collections import Counter
@@ -7,12 +8,16 @@ from typing import List
 import nltk
 from nltk.stem import PorterStemmer
 from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.tokenize import sent_tokenize
 import string
 import torch
 import re
 
 nlp = spacy.load("en_core_web_sm")
 
+nltk.download('punkt')
+nltk.download('stopwords')
 class FactExample:
     """
     :param fact: A string representing the fact to make a prediction on
@@ -47,16 +52,24 @@ class EntailmentModel:
 
         # Note that the labels are ["entailment", "neutral", "contradiction"]. There are a number of ways to map
         # these logits or probabilities to classification decisions; you'll have to decide how you want to do this.
+        # raise Exception("Don't call me, call my subclasses")
 
-        raise Exception("Not implemented")
+        # This is where the code should go
+        predicted_label_idx = torch.argmax(logits, dim=1).item()
 
+        if predicted_label_idx == 0:  # "entailment"
+            result = "supported"
+        elif predicted_label_idx == 1:  # "neutral"
+            result = "neutral"
+        else:  # "contradiction"
+            result = "contradiction"
+        
         # To prevent out-of-memory (OOM) issues during autograding, we explicitly delete
         # objects inputs, outputs, logits, and any results that are no longer needed after the computation.
         del inputs, outputs, logits
         gc.collect()
 
-        # return something
-
+        return result
 
 class FactChecker(object):
     """
@@ -88,7 +101,7 @@ class WordRecallThresholdFactChecker(object):
     def preprocess_text(self, text: str):
         # Tokenize the text and remove punctuation
         doc = nlp(text)
-        tokens = word_tokenize(text)
+        tokens = word_tokenize(text.replace("<s>", "").replace("</s>", ""))
         # tokens = [word for word in tokens if word not in punctuation_to_remove]
         tokens = [word if not re.match(r'^\d+$', word) else 'NUM' for word in tokens]
         tokens = [word.lower() for word in tokens if word != 'NUM' and word.isalpha() and word not in string.punctuation]
@@ -104,55 +117,74 @@ class WordRecallThresholdFactChecker(object):
 
         return ' '.join(tokens)
     
-    def jaccard_similarity(self, fact_word_set, passage_word_set):
-        intersection = len(fact_word_set.intersection(passage_word_set))
-        # union = len(set1) + len(set2) - intersection
-        return intersection / len(fact_word_set) # / union if union != 0 else 0  # To avoid division by zero
-
     def predict(self, fact: str, passages: List[dict]) -> str:
-        # Preprocess fact
         fact = self.preprocess_text(fact)
-        print("Fact: ", fact)
         fact_word_set = set(fact.split())
-
-        # Initialize lists to store Jaccard similarity scores
-        similarity_scores = []
+        
         supported = False
         for passage in passages:
             passage_text = passage['text']
             passage_text = self.preprocess_text(passage_text)
             passage_word_set = set(passage_text.split())
+            
+            intersection = len(fact_word_set.intersection(passage_word_set))
+            jaccard_sim = intersection / len(fact_word_set)
 
-            # Calculate Jaccard similarity between fact and passage
-            jaccard_sim = self.jaccard_similarity(fact_word_set, passage_word_set)
-            similarity_scores.append((passage_text, jaccard_sim))
-
-        
-
-        # Print the similarity scores for each passage
-        for text, score in similarity_scores:
-            if score > 0.7:  # You can adjust the threshold herex
+            if jaccard_sim > 0.7:
                 supported = True
-            print(f"Jaccard Similarity for {fact}': {score}")
 
         if supported:
             return "S"
         else:
-            return "NS" 
-
-# test
-
-
-
-
+            return "NS"
 
 
 class EntailmentFactChecker(object):
     def __init__(self, ent_model):
         self.ent_model = ent_model
+        self.stemmer = PorterStemmer()
+        self.stopwords = set(stopwords.words('english'))
+
+    def preprocess_text(self, text: str) -> List[str]:
+        # Tokenize
+        tokens = word_tokenize(text.replace("<s>", "").replace("</s>", ""))
+        tokens = [word if not re.match(r'^\d+$', word) else 'NUM' for word in tokens]
+        tokens = [word.lower() for word in tokens if word !='NUM' and word.isalpha() and word not in string.punctuation]
+        return [self.stemmer.stem(token) for token in tokens if token.lower() not in self.stopwords and token.isalpha()]
+    
+    # same as part 1, but threshold needed to be tweaked
+    def word_overlap(self, fact: str, passages: List[dict]) -> str:
+        fact_tokens = set(self.preprocess_text(fact))
+        for passage in passages:
+            passage_tokens = set(self.preprocess_text(passage['text']))
+            intersection = fact_tokens.intersection(passage_tokens)
+            jaccard = len(intersection) / len(fact_tokens)
+            if jaccard > 0.45:
+                return "S"
+        return "NS"
 
     def predict(self, fact: str, passages: List[dict]) -> str:
-        raise Exception("Implement me")
+        neutral_count = 0
+        if self.word_overlap(fact, passages) == 'S':
+            for passage in passages:
+                sentences = sent_tokenize(passage['text'])
+                for sentence in sentences:
+                    total_sentences = len(sentences) * len(passages)
+                    # get entailment result
+                    result = self.ent_model.check_entailment(
+                        sentence, fact)
+                    # return early is supported
+                    # once one sentence is supported, the fact is supported
+                    if result == 'supported':
+                        return "S"
+                    # we dont know yet
+                    if result == 'neutral':
+                        neutral_count += 1
+                        # if all neutral, then we are saying its supported
+                        if neutral_count == total_sentences:
+                            return "S"
+        # if it hasnt returned supported yet, then it is not supported
+        return 'NS'
 
 
 # OPTIONAL

@@ -10,7 +10,7 @@ from factcheck import *
 
 def _parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, required=True, help="choose from [random_guess', 'always_entail', 'word_overlap', 'parsing', 'entailment]")
+    parser.add_argument('--mode', type=str, required=True, help="choose from [random', 'always_entail', 'word_overlap', 'parsing', 'entailment]")
     # parser.add_argument('--labels_path', type=str, default="data/labeled_ChatGPT.jsonl", help="path to the labels")
     parser.add_argument('--labels_path', type=str, default="data/dev_labeled_ChatGPT.jsonl", help="path to the labels")
     parser.add_argument('--passages_path', type=str, default="data/passages_bm25_ChatGPT_humfacts.jsonl", help="path to the passages retrieved for the ChatGPT human-labeled facts")
@@ -33,11 +33,6 @@ def read_passages(path: str):
             for passage in dict["passages"]:
                 if passage["title"] != name:
                     raise Exception("Couldn't find a match for: " + name + " " + passage["title"])
-            for item in dict["passages"]:
-                # Remove the name from the beginning of the passage. This may be useful to disambiguate
-                # the entity if the sentence starts with a pronoun but can also throw off the entailment model.
-                name_pos = item['text'].find(name)
-                item['text'] = item['text'][:name_pos] + item['text'][name_pos+len(name)+1:]
             fact_to_passage_dict[dict["sent"]] = dict["passages"]
     return fact_to_passage_dict
 
